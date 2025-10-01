@@ -12,7 +12,7 @@ import { spawn } from 'child_process'
 import lodash from 'lodash'
 import chalk from 'chalk'
 import syntaxerror from 'syntax-error'
-import { tmpdir } from 'os'
+import os, { tmpdir } from 'os'
 import { format } from 'util'
 import P from 'pino'
 import pino from 'pino'
@@ -21,13 +21,20 @@ import { Boom } from '@hapi/boom'
 import { makeWASocket, protoType, serialize } from './lib/simple.js'
 import {Low, JSONFile} from 'lowdb'
 import { mongoDB, mongoDBV2 } from './lib/mongoDB.js'
+import CloudDBAdapter from './lib/cloudDBAdapter.js'
 import store from './lib/store.js'
 import readline from 'readline'
 import NodeCache from 'node-cache'
-const { makeInMemoryStore, DisconnectReason, useMultiFileAuthState, MessageRetryMap, fetchLatestBaileysVersion, makeCacheableSignalKeyStore,PHONENUMBER_MCC } = await import('@whiskeysockets/baileys')
+import cp from 'child_process'
+const { makeInMemoryStore, DisconnectReason, useMultiFileAuthState, MessageRetryMap, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, PHONENUMBER_MCC, jidNormalizedUser } = await import('@whiskeysockets/baileys')
 const { CONNECTING } = ws
 const { chain } = lodash
 const PORT = process.env.PORT || process.env.SERVER_PORT || 3000
+
+// Get language variables from config.js
+const lenguajeGB = global.lenguajeGB || {}
+const mid = global.mid || {}
+
 protoType()
 serialize()
 global.__filename = function filename(pathURL = import.meta.url, rmPrefix = platform !== 'win32') {
@@ -42,9 +49,12 @@ global.timestamp = { start: new Date }
 const __dirname = global.__dirname(import.meta.url);
 global.opts = new Object(yargs(process.argv.slice(2)).exitProcess(false).parse());
 global.prefix = new RegExp('^[' + (opts['prefix'] || '*/i!#$%+£¢€¥^°=¶∆×÷π√✓©®&.\\-.@').replace(/[|\\{}()[\]^$+*.\-\^]/g, '\\$&') + ']');
-global.db = new Low(/https?:\/\//.test(opts['db'] || '') ? new cloudDBAdapter(opts['db']) : new JSONFile(`${opts._[0] ? opts._[0] + '_' : ''}database.json`));
+
+// Database setup with CloudDBAdapter support
+global.db = new Low(/https?:\/\//.test(opts['db'] || '') ? new CloudDBAdapter(opts['db']) : new JSONFile(`${opts._[0] ? opts._[0] + '_' : ''}database.json`));
 global.DATABASE = global.db; 
 global.loadDatabase = async function loadDatabase() {
+try {
 if (global.db.READ) {
 return new Promise((resolve) => setInterval(async function() {
 if (!global.db.READ) {
@@ -66,6 +76,17 @@ settings: {},
 ...(global.db.data || {}),
 };
 global.db.chain = chain(global.db.data);
+} catch (e) {
+console.error('Error loading database:', e)
+global.db.data = {
+users: {},
+chats: {},
+stats: {},
+msgs: {},
+sticker: {},
+settings: {},
+};
+}
 };
 loadDatabase();
 
@@ -80,6 +101,7 @@ global.conns = [];
 
 global.chatgpt = new Low(new JSONFile(path.join(__dirname, '/db/chatgpt.json')));
 global.loadChatgptDB = async function loadChatgptDB() {
+try {
 if (global.chatgpt.READ) {
 return new Promise((resolve) =>
 setInterval(async function() {
@@ -97,6 +119,12 @@ users: {},
 ...(global.chatgpt.data || {}),
 };
 global.chatgpt.chain = lodash.chain(global.chatgpt.data);
+} catch (e) {
+console.error('Error loading ChatGPT database:', e)
+global.chatgpt.data = {
+users: {},
+};
+}
 };
 loadChatgptDB();
 
@@ -107,7 +135,11 @@ global.rutaBot = join(__dirname, authFile)
 global.rutaJadiBot = join(__dirname, authFileJB)
 
 if (!fs.existsSync(rutaJadiBot)) {
+try {
 fs.mkdirSync(rutaJadiBot)
+} catch (e) {
+console.error('Error creating GataJadiBot directory:', e)
+}
 }
 
 const {state, saveState, saveCreds} = await useMultiFileAuthState(global.authFile)
@@ -138,33 +170,38 @@ if (methodCodeQR) {
 opcion = '1'
 }
 if (!methodCodeQR && !methodCode && !fs.existsSync(`./${authFile}/creds.json`)) {
+try {
 do {
 let lineM = '⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ ⋯ 》'
 opcion = await question(`╭${lineM}  
 ┊ ${chalk.blueBright('╭┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅')}
-┊ ${chalk.blueBright('┊')} ${chalk.blue.bgBlue.bold.cyan(mid.methodCode1)}
+┊ ${chalk.blueBright('┊')} ${chalk.blue.bgBlue.bold.cyan(mid.methodCode1 || 'Select Authentication Method')}
 ┊ ${chalk.blueBright('╰┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅')}   
 ┊ ${chalk.blueBright('╭┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅')}     
-┊ ${chalk.blueBright('┊')} ${chalk.green.bgMagenta.bold.yellow(mid.methodCode2)}
-┊ ${chalk.blueBright('┊')} ${chalk.bold.redBright(`⇢  ${mid.methodCode3} 1:`)} ${chalk.greenBright(mid.methodCode4)}
-┊ ${chalk.blueBright('┊')} ${chalk.bold.redBright(`⇢  ${mid.methodCode3} 2:`)} ${chalk.greenBright(mid.methodCode5)}
+┊ ${chalk.blueBright('┊')} ${chalk.green.bgMagenta.bold.yellow(mid.methodCode2 || 'Choose an option:')}
+┊ ${chalk.blueBright('┊')} ${chalk.bold.redBright(`⇢  ${mid.methodCode3 || 'Option'} 1:`)} ${chalk.greenBright(mid.methodCode4 || 'QR Code')}
+┊ ${chalk.blueBright('┊')} ${chalk.bold.redBright(`⇢  ${mid.methodCode3 || 'Option'} 2:`)} ${chalk.greenBright(mid.methodCode5 || 'Pairing Code')}
 ┊ ${chalk.blueBright('╰┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅')}
 ┊ ${chalk.blueBright('╭┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅')}     
-┊ ${chalk.blueBright('┊')} ${chalk.italic.magenta(mid.methodCode6)}
-┊ ${chalk.blueBright('┊')} ${chalk.italic.magenta(mid.methodCode7)}
+┊ ${chalk.blueBright('┊')} ${chalk.italic.magenta(mid.methodCode6 || 'Enter 1 or 2')}
+┊ ${chalk.blueBright('┊')} ${chalk.italic.magenta(mid.methodCode7 || '')}
 ┊ ${chalk.blueBright('╰┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅')} 
 ┊ ${chalk.blueBright('╭┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅')}    
-┊ ${chalk.blueBright('┊')} ${chalk.red.bgRed.bold.green(mid.methodCode8)}
-┊ ${chalk.blueBright('┊')} ${chalk.italic.cyan(mid.methodCode9)}
-┊ ${chalk.blueBright('┊')} ${chalk.italic.cyan(mid.methodCode10)}
-┊ ${chalk.blueBright('┊')} ${chalk.bold.yellow(`npm run qr ${chalk.italic.magenta(`(${mid.methodCode12})`)}`)}
-┊ ${chalk.blueBright('┊')} ${chalk.bold.yellow(`npm run code ${chalk.italic.magenta(`(${mid.methodCode13})`)}`)}
-┊ ${chalk.blueBright('┊')} ${chalk.bold.yellow(`npm start ${chalk.italic.magenta(`(${mid.methodCode14})`)}`)}
+┊ ${chalk.blueBright('┊')} ${chalk.red.bgRed.bold.green(mid.methodCode8 || 'Alternatives')}
+┊ ${chalk.blueBright('┊')} ${chalk.italic.cyan(mid.methodCode9 || 'You can also use:')}
+┊ ${chalk.blueBright('┊')} ${chalk.italic.cyan(mid.methodCode10 || '')}
+┊ ${chalk.blueBright('┊')} ${chalk.bold.yellow(`npm run qr ${chalk.italic.magenta(`(${mid.methodCode12 || 'QR Code'})`)}`) }
+┊ ${chalk.blueBright('┊')} ${chalk.bold.yellow(`npm run code ${chalk.italic.magenta(`(${mid.methodCode13 || 'Pairing Code'})`)}`) }
+┊ ${chalk.blueBright('┊')} ${chalk.bold.yellow(`npm start ${chalk.italic.magenta(`(${mid.methodCode14 || 'Interactive'})`)}`) }
 ┊ ${chalk.blueBright('╰┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅')} 
 ╰${lineM}\n${chalk.bold.magentaBright('---> ')}`)
 if (!/^[1-2]$/.test(opcion)) {
-console.log(chalk.bold.redBright(mid.methodCode11(chalk)))
+console.log(chalk.bold.redBright(typeof mid.methodCode11 === 'function' ? mid.methodCode11(chalk) : 'Invalid option. Please enter 1 or 2'))
 }} while (opcion !== '1' && opcion !== '2' || fs.existsSync(`./${authFile}/creds.json`))
+} catch (e) {
+console.error('Error in method selection:', e)
+opcion = '1' // Default to QR code on error
+}
 }
 
 const filterStrings = [
@@ -209,17 +246,25 @@ let addNumber
 if (!!phoneNumber) {
 addNumber = phoneNumber.replace(/[^0-9]/g, '')
 } else {
+try {
 do {
-phoneNumber = await question(chalk.bgBlack(chalk.bold.greenBright(mid.phNumber2(chalk))))
+phoneNumber = await question(chalk.bgBlack(chalk.bold.greenBright(mid.phNumber2 ? (typeof mid.phNumber2 === 'function' ? mid.phNumber2(chalk) : 'Enter phone number:') : 'Enter phone number:')))
 phoneNumber = phoneNumber.replace(/\D/g,'')
 } while (!Object.keys(PHONENUMBER_MCC).some(v => phoneNumber.startsWith(v)))
 rl.close()
 addNumber = phoneNumber.replace(/\D/g, '')
 setTimeout(async () => {
+try {
 let codeBot = await conn.requestPairingCode(addNumber)
 codeBot = codeBot?.match(/.{1,4}/g)?.join("-") || codeBot
-console.log(chalk.bold.white(chalk.bgMagenta(mid.pairingCode)), chalk.bold.white(chalk.white(codeBot)))
+console.log(chalk.bold.white(chalk.bgMagenta(mid.pairingCode || 'Pairing Code:')), chalk.bold.white(chalk.white(codeBot)))
+} catch (e) {
+console.error('Error requesting pairing code:', e)
+}
 }, 2000)
+} catch (e) {
+console.error('Error in phone number input:', e)
+}
 }}}
 }
 
@@ -228,15 +273,34 @@ conn.well = false
 
 if (!opts['test']) {
 if (global.db) setInterval(async () => {
+try {
 if (global.db.data) await global.db.write()
-if (opts['autocleartmp'] && (global.support || {}).find) (tmp = [os.tmpdir(), 'tmp', "GataJadiBot"], tmp.forEach(filename => cp.spawn('find', [filename, '-amin', '2', '-type', 'f', '-delete'])))}, 30 * 1000)}
+} catch (e) {
+console.error('Error writing database:', e)
+}
+if (opts['autocleartmp'] && (global.support || {}).find) {
+try {
+let tmp = [os.tmpdir(), 'tmp', "GataJadiBot"];
+tmp.forEach(filename => cp.spawn('find', [filename, '-amin', '2', '-type', 'f', '-delete']))
+} catch (e) {
+console.error('Error in autocleartmp:', e)
+}
+}
+}, 30 * 1000)}
 if (opts['server']) (await import('./server.js')).default(global.conn, PORT)
 async function getMessage(key) {
+try {
 if (store) {
-} return {
+}
+} catch (e) {
+console.error('Error in getMessage:', e)
+}
+return {
 conversation: 'SimpleBot',
-}}
+}
+}
 async function connectionUpdate(update) {  
+try {
 const {connection, lastDisconnect, isNewLogin} = update
 global.stopped = connection
 if (isNewLogin) conn.isInit = true
@@ -249,34 +313,37 @@ global.timestamp.connect = new Date
 if (global.db.data == null) loadDatabase()
 if (update.qr != 0 && update.qr != undefined || methodCodeQR) {
 if (opcion == '1' || methodCodeQR) {
-console.log(chalk.bold.yellow(mid.mCodigoQR))}
+console.log(chalk.bold.yellow(mid.mCodigoQR || 'QR Code Generated'))}
 }
 if (connection == 'open') {
-console.log(chalk.bold.greenBright(mid.mConexion))}
+console.log(chalk.bold.greenBright(mid.mConexion || 'Connection Established'))}
 let reason = new Boom(lastDisconnect?.error)?.output?.statusCode
 if (connection === 'close') {
 if (reason === DisconnectReason.badSession) {
-console.log(chalk.bold.cyanBright(lenguajeGB['smsConexionOFF']()))
+console.log(chalk.bold.cyanBright(typeof lenguajeGB['smsConexionOFF'] === 'function' ? lenguajeGB['smsConexionOFF']() : 'Connection closed - Bad Session'))
 } else if (reason === DisconnectReason.connectionClosed) {
-console.log(chalk.bold.magentaBright(lenguajeGB['smsConexioncerrar']()))
+console.log(chalk.bold.magentaBright(typeof lenguajeGB['smsConexioncerrar'] === 'function' ? lenguajeGB['smsConexioncerrar']() : 'Connection closed'))
 await global.reloadHandler(true).catch(console.error)
 } else if (reason === DisconnectReason.connectionLost) {
-console.log(chalk.bold.blueBright(lenguajeGB['smsConexionperdida']()))
+console.log(chalk.bold.blueBright(typeof lenguajeGB['smsConexionperdida'] === 'function' ? lenguajeGB['smsConexionperdida']() : 'Connection lost'))
 await global.reloadHandler(true).catch(console.error)
 } else if (reason === DisconnectReason.connectionReplaced) {
-console.log(chalk.bold.yellowBright(lenguajeGB['smsConexionreem']()))
+console.log(chalk.bold.yellowBright(typeof lenguajeGB['smsConexionreem'] === 'function' ? lenguajeGB['smsConexionreem']() : 'Connection replaced'))
 } else if (reason === DisconnectReason.loggedOut) {
-console.log(chalk.bold.redBright(lenguajeGB['smsConexionOFF']()))
+console.log(chalk.bold.redBright(typeof lenguajeGB['smsConexionOFF'] === 'function' ? lenguajeGB['smsConexionOFF']() : 'Logged out'))
 await global.reloadHandler(true).catch(console.error)
 } else if (reason === DisconnectReason.restartRequired) {
-console.log(chalk.bold.cyanBright(lenguajeGB['smsConexionreinicio']()))
+console.log(chalk.bold.cyanBright(typeof lenguajeGB['smsConexionreinicio'] === 'function' ? lenguajeGB['smsConexionreinicio']() : 'Restart required'))
 await global.reloadHandler(true).catch(console.error)
 } else if (reason === DisconnectReason.timedOut) {
-console.log(chalk.bold.yellowBright(lenguajeGB['smsConexiontiem']()))
+console.log(chalk.bold.yellowBright(typeof lenguajeGB['smsConexiontiem'] === 'function' ? lenguajeGB['smsConexiontiem']() : 'Connection timed out'))
 await global.reloadHandler(true).catch(console.error) //process.send('reset')
 } else {
-console.log(chalk.bold.redBright(lenguajeGB['smsConexiondescon'](reason, connection)))
+console.log(chalk.bold.redBright(typeof lenguajeGB['smsConexiondescon'] === 'function' ? lenguajeGB['smsConexiondescon'](reason, connection) : `Connection closed: ${reason}`))
 }}
+} catch (e) {
+console.error('Error in connectionUpdate:', e)
+}
 }
 process.on('uncaughtException', console.error);
 //process.on('uncaughtException', (err) => {
@@ -349,14 +416,14 @@ conn.ev.off('connection.update', conn.connectionUpdate);
 conn.ev.off('creds.update', conn.credsUpdate);
 }
 //Información para Grupos
-conn.welcome = lenguajeGB['smsWelcome']() 
-conn.bye = lenguajeGB['smsBye']() 
-conn.spromote = lenguajeGB['smsSpromote']() 
-conn.sdemote = lenguajeGB['smsSdemote']() 
-conn.sDesc = lenguajeGB['smsSdesc']() 
-conn.sSubject = lenguajeGB['smsSsubject']() 
-conn.sIcon = lenguajeGB['smsSicon']() 
-conn.sRevoke = lenguajeGB['smsSrevoke']() 
+conn.welcome = typeof lenguajeGB['smsWelcome'] === 'function' ? lenguajeGB['smsWelcome']() : '' 
+conn.bye = typeof lenguajeGB['smsBye'] === 'function' ? lenguajeGB['smsBye']() : '' 
+conn.spromote = typeof lenguajeGB['smsSpromote'] === 'function' ? lenguajeGB['smsSpromote']() : '' 
+conn.sdemote = typeof lenguajeGB['smsSdemote'] === 'function' ? lenguajeGB['smsSdemote']() : '' 
+conn.sDesc = typeof lenguajeGB['smsSdesc'] === 'function' ? lenguajeGB['smsSdesc']() : '' 
+conn.sSubject = typeof lenguajeGB['smsSsubject'] === 'function' ? lenguajeGB['smsSsubject']() : '' 
+conn.sIcon = typeof lenguajeGB['smsSicon'] === 'function' ? lenguajeGB['smsSicon']() : '' 
+conn.sRevoke = typeof lenguajeGB['smsSrevoke'] === 'function' ? lenguajeGB['smsSrevoke']() : '' 
 conn.handler = handler.handler.bind(global.conn);
 conn.participantsUpdate = handler.participantsUpdate.bind(global.conn);
 conn.groupsUpdate = handler.groupsUpdate.bind(global.conn);
@@ -394,6 +461,11 @@ const pluginFolder = global.__dirname(join(__dirname, './plugins/index'))
 const pluginFilter = (filename) => /\.js$/.test(filename)
 global.plugins = {}
 async function filesInit() {
+try {
+if (!existsSync(pluginFolder)) {
+console.warn(`Plugin folder ${pluginFolder} does not exist, skipping plugin loading`)
+return
+}
 for (const filename of readdirSync(pluginFolder).filter(pluginFilter)) {
 try {
 const file = global.__filename(join(pluginFolder, filename))
@@ -402,7 +474,12 @@ global.plugins[filename] = module.default || module
 } catch (e) {
 conn.logger.error(e)
 delete global.plugins[filename]
-}}}
+}
+}
+} catch (e) {
+console.error('Error in filesInit:', e)
+}
+}
 filesInit().then((_) => Object.keys(global.plugins)).catch(console.error)
 
 global.reload = async (_ev, filename) => {
@@ -457,60 +534,132 @@ const s = global.support = {ffmpeg, ffprobe, ffmpegWebp, convert, magick, gm, fi
 Object.freeze(global.support);
 }
 function clearTmp() {
+try {
 const tmpDir = join(__dirname, 'tmp')
+if (!existsSync(tmpDir)) {
+return; // Directory doesn't exist, nothing to clear
+}
 const filenames = readdirSync(tmpDir)
 filenames.forEach(file => {
+try {
 const filePath = join(tmpDir, file)
-unlinkSync(filePath)})
+const stats = statSync(filePath)
+if (stats.isFile()) {
+unlinkSync(filePath)
+}
+} catch (e) {
+console.error(`Error deleting file ${file}:`, e)
+}
+})
+} catch (e) {
+console.error('Error in clearTmp:', e)
+}
 }
 function purgeSession() {
+try {
 let prekey = []
-let directorio = readdirSync("./FlashBotSession")
+const sessionDir = "./FlashBotSession"
+if (!existsSync(sessionDir)) {
+return; // Session directory doesn't exist
+}
+let directorio = readdirSync(sessionDir)
 let filesFolderPreKeys = directorio.filter(file => {
 return file.startsWith('pre-key-')
 })
 prekey = [...prekey, ...filesFolderPreKeys]
 filesFolderPreKeys.forEach(files => {
-unlinkSync(`./FlashBotSession/${files}`)
+try {
+unlinkSync(`${sessionDir}/${files}`)
+} catch (e) {
+console.error(`Error deleting pre-key file ${files}:`, e)
+}
 })
+} catch (e) {
+console.error('Error in purgeSession:', e)
+}
 } 
 function purgeSessionSB() {
 try {
-const listaDirectorios = readdirSync('./GataJadiBot/');
+const subBotDir = './GataJadiBot/';
+if (!existsSync(subBotDir)) {
+return; // Directory doesn't exist
+}
+const listaDirectorios = readdirSync(subBotDir);
 let SBprekey = [];
 listaDirectorios.forEach(directorio => {
-if (statSync(`./GataJadiBot/${directorio}`).isDirectory()) {
-const DSBPreKeys = readdirSync(`./GataJadiBot/${directorio}`).filter(fileInDir => {
+try {
+const dirPath = `${subBotDir}${directorio}`;
+if (statSync(dirPath).isDirectory()) {
+const DSBPreKeys = readdirSync(dirPath).filter(fileInDir => {
 return fileInDir.startsWith('pre-key-')
 })
 SBprekey = [...SBprekey, ...DSBPreKeys];
 DSBPreKeys.forEach(fileInDir => {
+try {
 if (fileInDir !== 'creds.json') {
-unlinkSync(`./GataJadiBot/${directorio}/${fileInDir}`)
-}})
-}})
+unlinkSync(`${dirPath}/${fileInDir}`)
+}
+} catch (e) {
+console.error(`Error deleting sub-bot file ${fileInDir}:`, e)
+}
+})
+}
+} catch (e) {
+console.error(`Error processing sub-bot directory ${directorio}:`, e)
+}
+})
 if (SBprekey.length === 0) {
+if (typeof lenguajeGB.smspurgeSessionSB1 === 'function') {
 console.log(chalk.bold.green(lenguajeGB.smspurgeSessionSB1()))
+}
 } else {
+if (typeof lenguajeGB.smspurgeSessionSB2 === 'function') {
 console.log(chalk.bold.cyanBright(lenguajeGB.smspurgeSessionSB2()))
-}} catch (err) {
+}
+}
+} catch (err) {
+if (typeof lenguajeGB.smspurgeSessionSB3 === 'function') {
 console.log(chalk.bold.red(lenguajeGB.smspurgeSessionSB3() + err))
-}}
+} else {
+console.error('Error in purgeSessionSB:', err)
+}
+}
+}
 function purgeOldFiles() {
+try {
 const directories = ['./FlashBotSession/', './GataJadiBot/']
 directories.forEach(dir => {
-readdirSync(dir, (err, files) => {
-if (err) throw err
+try {
+if (!existsSync(dir)) {
+return; // Directory doesn't exist, skip
+}
+const files = readdirSync(dir)
 files.forEach(file => {
+try {
 if (file !== 'creds.json') {
 const filePath = path.join(dir, file);
-unlinkSync(filePath, err => {
-if (err) {
-console.log(chalk.bold.red(`${lenguajeGB.smspurgeOldFiles3()} ${file} ${lenguajeGB.smspurgeOldFiles4()}` + err))
-} else {
+const stats = statSync(filePath)
+if (stats.isFile()) {
+unlinkSync(filePath)
+if (typeof lenguajeGB.smspurgeOldFiles1 === 'function') {
 console.log(chalk.bold.green(`${lenguajeGB.smspurgeOldFiles1()} ${file} ${lenguajeGB.smspurgeOldFiles2()}`))
-} }) }
-}) }) }) }
+}
+}
+}
+} catch (err) {
+if (typeof lenguajeGB.smspurgeOldFiles3 === 'function') {
+console.log(chalk.bold.red(`${lenguajeGB.smspurgeOldFiles3()} ${file} ${lenguajeGB.smspurgeOldFiles4()}` + err))
+}
+}
+})
+} catch (err) {
+console.error(`Error processing directory ${dir}:`, err)
+}
+})
+} catch (e) {
+console.error('Error in purgeOldFiles:', e)
+}
+}
 function redefineConsoleMethod(methodName, filterStrings) {
 const originalConsoleMethod = console[methodName]
 console[methodName] = function() {
@@ -521,9 +670,16 @@ arguments[0] = ""
 originalConsoleMethod.apply(console, arguments)
 }}
 setInterval(async () => {
+try {
 if (stopped === 'close' || !conn || !conn.user) return
 await clearTmp()
-console.log(chalk.bold.cyanBright(lenguajeGB.smsClearTmp()))}, 1000 * 60 * 4) // 4 min 
+if (typeof lenguajeGB.smsClearTmp === 'function') {
+console.log(chalk.bold.cyanBright(lenguajeGB.smsClearTmp()))
+}
+} catch (e) {
+console.error('Error in clearTmp interval:', e)
+}
+}, 1000 * 60 * 4) // 4 min 
 //setInterval(async () => {
 //if (stopped === 'close' || !conn || !conn.user) return
 //await purgeSession()
@@ -532,15 +688,36 @@ console.log(chalk.bold.cyanBright(lenguajeGB.smsClearTmp()))}, 1000 * 60 * 4) //
 //if (stopped === 'close' || !conn || !conn.user) return
 //await purgeSessionSB()}, 1000 * 60 * 10) 
 setInterval(async () => {
+try {
 if (stopped === 'close' || !conn || !conn.user) return
 await purgeOldFiles()
-console.log(chalk.bold.cyanBright(lenguajeGB.smspurgeOldFiles()))}, 1000 * 60 * 10)
+if (typeof lenguajeGB.smspurgeOldFiles === 'function') {
+console.log(chalk.bold.cyanBright(lenguajeGB.smspurgeOldFiles()))
+}
+} catch (e) {
+console.error('Error in purgeOldFiles interval:', e)
+}
+}, 1000 * 60 * 10)
 
-_quickTest().then(() => conn.logger.info(chalk.bold(lenguajeGB['smsCargando']().trim()))).catch(console.error)
+_quickTest().then(() => {
+try {
+if (typeof lenguajeGB['smsCargando'] === 'function') {
+conn.logger.info(chalk.bold(lenguajeGB['smsCargando']().trim()))
+}
+} catch (e) {
+console.error('Error in _quickTest callback:', e)
+}
+}).catch(console.error)
 
 let file = fileURLToPath(import.meta.url)
 watchFile(file, () => {
+try {
 unwatchFile(file)
+if (typeof lenguajeGB['smsMainBot'] === 'function') {
 console.log(chalk.bold.greenBright(lenguajeGB['smsMainBot']().trim()))
+}
 import(`${file}?update=${Date.now()}`)
+} catch (e) {
+console.error('Error in watchFile callback:', e)
+}
 })
