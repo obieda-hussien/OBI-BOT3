@@ -21,6 +21,7 @@ import { Boom } from '@hapi/boom'
 import { makeWASocket, protoType, serialize } from './lib/simple.js'
 import {Low, JSONFile} from 'lowdb'
 import { mongoDB, mongoDBV2 } from './lib/mongoDB.js'
+import CloudDBAdapter from './lib/cloudDBAdapter.js'
 import store from './lib/store.js'
 import readline from 'readline'
 import NodeCache from 'node-cache'
@@ -49,9 +50,8 @@ const __dirname = global.__dirname(import.meta.url);
 global.opts = new Object(yargs(process.argv.slice(2)).exitProcess(false).parse());
 global.prefix = new RegExp('^[' + (opts['prefix'] || '*/i!#$%+£¢€¥^°=¶∆×÷π√✓©®&.\\-.@').replace(/[|\\{}()[\]^$+*.\-\^]/g, '\\$&') + ']');
 
-// Fix cloudDBAdapter - use JSONFile as fallback if cloudDBAdapter is not available
-const cloudDBAdapter = undefined; // Placeholder for cloud DB adapter if available
-global.db = new Low(/https?:\/\//.test(opts['db'] || '') ? (cloudDBAdapter ? new cloudDBAdapter(opts['db']) : new JSONFile(`database.json`)) : new JSONFile(`${opts._[0] ? opts._[0] + '_' : ''}database.json`));
+// Database setup with CloudDBAdapter support
+global.db = new Low(/https?:\/\//.test(opts['db'] || '') ? new CloudDBAdapter(opts['db']) : new JSONFile(`${opts._[0] ? opts._[0] + '_' : ''}database.json`));
 global.DATABASE = global.db; 
 global.loadDatabase = async function loadDatabase() {
 try {

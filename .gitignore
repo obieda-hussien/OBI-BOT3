@@ -1,3 +1,15 @@
 terms.md
 dealers.md
- 
+node_modules/
+*.log
+*.env
+.env
+database.json
+FlashBotSession/
+GataJadiBot/
+tmp/
+*.session
+*.data.json
+package-lock.json
+.npm/
+.cache/
